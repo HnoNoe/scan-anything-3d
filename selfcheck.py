@@ -53,10 +53,11 @@ def umeyama(src, dst):
 
 
 def icp_align(src, dst, iterations=30):
-    """最近邻 ICP。src 为重建点云，dst 为真值。返回对齐后的 src 与 RMS。"""
+    """最近邻 ICP。src 为重建点云，dst 为真值。返回对齐后的 src（在 dst 原始坐标系）。"""
     from scipy.spatial import cKDTree
+    mu_d = dst.mean(0)
     src = src - src.mean(0)
-    dst = dst - dst.mean(0)
+    dst = dst - mu_d
     # 初始尺度：包围盒对角线比值
     s0 = np.linalg.norm(dst.max(0) - dst.min(0)) / max(
         1e-9, np.linalg.norm(src.max(0) - src.min(0)))
@@ -64,16 +65,20 @@ def icp_align(src, dst, iterations=30):
     R_all, t_all, s_all = np.eye(3), np.zeros(3), 1.0
     sub = src[::max(1, len(src) // 20000)]
     tree = cKDTree(dst[::max(1, len(dst) // 20000)])
-    for _ in range(iterations):
-        _, idx = tree.query(sub)
-        targets = dst[::max(1, len(dst) // 20000)][idx]
-        R, t, s = umeyama(sub, targets)
+    dsub = dst[::max(1, len(dst) // 20000)]
+    for it in range(iterations):
+        dd, idx = tree.query(sub)
+        # 截尾：丢掉距离最远的 30% 对应，抗离群点和错误配对
+        keep = dd < np.percentile(dd, 70)
+        R, t, s = umeyama(sub[keep], dsub[idx[keep]])
+        if it >= 3:
+            s = 1.0  # 尺度只在头几轮估计，之后冻结——否则部分重叠时持续缩小导致塌缩
         src = s * (src @ R.T) + t
         sub = s * (sub @ R.T) + t
         R_all = R @ R_all
         t_all = s * (t_all @ R.T) + t
         s_all = s * s_all
-    return src
+    return src + mu_d  # 对齐在居中坐标系完成，加回真值质心回到原始坐标系
 
 
 def render_views(xyz, rgb, frames_dir, n_views, jitter_cfg, seed=0):
@@ -88,7 +93,7 @@ def render_views(xyz, rgb, frames_dir, n_views, jitter_cfg, seed=0):
     span = np.linalg.norm(xyz.max(0) - xyz.min(0))
     r_obj = np.linalg.norm(xyz[:, :2] - center[:2], axis=1).max()
     f = float(W)
-    radius = 2.6 * r_obj
+    radius = 1.9 * r_obj  # 目标占画面约一半（太小 SIFT 特征不足）
     order = rng.permutation(len(xyz))
 
     for k in range(n_views):
@@ -123,13 +128,18 @@ def render_views(xyz, rgb, frames_dir, n_views, jitter_cfg, seed=0):
         py = np.round(v[idx]).astype(int)
         keep = (px >= 0) & (px < W) & (py >= 0) & (py < H)
         px, py = px[keep], py[keep]
-        # 向量化 splat（1 像素点 + 简单 z-buffer）
+        # 向量化 splat：2x2 像素块 + 简单 z-buffer（1px 点太稀，SIFT 没特征）
         dsel = depth[idx[keep]]
-        m = dsel < zbuf[py, px]
-        zbuf[py[m], px[m]] = dsel[m]
-        img[py[m], px[m]] = rgb[idx[keep]][m]
+        for dx in (0, 1):
+            for dy in (0, 1):
+                qx, qy = px + dx, py + dy
+                ok = (qx < W) & (qy < H)
+                closer = dsel[ok] < zbuf[qy[ok], qx[ok]]
+                m = np.where(ok)[0][closer]
+                zbuf[qy[m], qx[m]] = dsel[ok][closer]
+                img[qy[m], qx[m]] = rgb[idx[keep]][ok][closer]
         # 传感器颗粒噪声：给纯色表面制造微纹理，SIFT 才有特征可提
-        img += rng.normal(0, 0.015, img.shape)
+        img += rng.normal(0, 0.03, img.shape)
         # 亮度抖动
         if jitter_cfg["bright"] > 0:
             img *= 1 + rng.normal(0, jitter_cfg["bright"])
