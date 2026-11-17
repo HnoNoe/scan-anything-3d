@@ -46,7 +46,27 @@ python view_ply.py my_cup/dense/fused.ply my_cup/check.png
 # 3. 居中裁剪：把主体从场景里抠出来（密度峰自动定位）
 python crop_center.py my_cup/dense/fused.ply my_cup/object --radius 0.5
 # 产物：my_cup/object_cropped.npy + .png
+
+# 4. 自检（改参数/改代码后验证管线好坏）：
+python selfcheck.py my_cup/dense/fused.ply --out check1 --grade handheld
+# 真值模型 -> 模拟手持抖动渲染 -> 走 scan.reconstruct 同一条代码路径重建
+# -> ICP 对齐 -> report.json 成绩单（注册率/精度/完整度）+ compare.png 对照图
 ```
+
+## 自检器（selfcheck.py）：改管线的闭环验证
+
+任何一次参数调整（抽帧率、匹配器、模糊程度……）都可以用同一套量尺验收：
+
+| 抖动等级 | 模拟内容 | 用途 |
+|----------|---------|------|
+| `clean` | 无抖动 | 管线上限 |
+| `handheld`（默认） | 位姿 ±1.2° + 半径 ±1% + 亮度 ±6% + 轻模糊 | 模拟手持绕拍 |
+| `noisy` | 上述再加三倍 | 测管线底线 |
+
+成绩单指标（单位 = 物体尺寸，越小越好）：
+- **帧注册率**：SfM 注册帧数 / 总帧数，低于 90% 说明拍摄或匹配有问题
+- **精度**（重建→真值距离）：mean / p95
+- **完整度**（真值→重建距离）：2% / 5% 阈值内的覆盖率
 
 ## 拍摄规范（决定成败，务必看 [docs/SHOOTING.md](docs/SHOOTING.md)）
 
@@ -60,8 +80,8 @@ python crop_center.py my_cup/dense/fused.ply my_cup/object --radius 0.5
 
 ## 实测记录
 
-| 场景 | 视频 | 抽帧 | 注册率 | 稠密点云 |
-|------|------|------|--------|---------|
+| 场景 | 抽帧 | 注册率 | 稠密点云 |
+|------|------|--------|---------|
 | 田间草莓苗（35 s, 720p） | 87 帧 | **87/87** | 1,899,397 点 |
 | 田间草莓苗（19 s, 1080p 60fps） | 48 帧 | **48/48** | 2,223,869 点 |
 
