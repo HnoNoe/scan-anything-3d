@@ -1,0 +1,17 @@
+# 重建产物（体积大，随时可重新生成）
+frames/
+sparse/
+dense/
+db.db
+*.log
+*.ply
+*.npy
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# 系统
+.DS_Store
+Thumbs.db
